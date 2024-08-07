@@ -2,6 +2,34 @@ import re
 import os.path
 import configparser
 
+SUFFIX_VOWELS = ('','a','e','o','á','é','ó','i','í','u','ú')
+UNSTRESSED_VOWELS = ('a','e','o','u','i')
+
+
+class WordInfo:
+	def __init__(self,word,word_n,word_count):
+		self.word = word.lower()
+		self.word_n = word_n
+		self.word_count = int(word_count)
+		self.plural_forms = []
+		self.other_forms = []
+		self.info = f"[{word} {word_count.strip()}]"
+
+	def add_count(self,add_count,word):
+		self.word_count += int(add_count)
+		self.add_info([word,add_count.strip()])
+
+	def add_form(self,word_form,count,form_kind = 0):
+		if (form_kind == 0):
+			self.other_forms.append(word_form)
+			self.add_info(["Other:",word_form,str(count).strip()])
+		else:
+			self.plural_forms.append(word_form)
+			self.add_info([word_form,str(count).strip()])
+
+
+	def add_info(self,info):
+		self.info += f",[{' '.join(info)}]"
 
 
 class Get5000:
@@ -68,8 +96,9 @@ class Get5000:
 class Get1M:
 	def __init__(self, source_file):
 		self.source_file = source_file
-		self.wordlist = [None]*50000
-		self.wordcount = [None]*50000
+		self.wordlist = [None]*2000000
+		self.wordcount = [None]*2000000
+		self.word_database = {}
 
 	def load(self) -> int:
 		if (not os.path.isfile(self.source_file)):
@@ -77,6 +106,7 @@ class Get1M:
 			return -1
 
 		with open(self.source_file) as f:
+			# dict per words, case-ins
 			for line in f:
 				line_parts = line.split("\t")
 				if (len(line_parts) > 2):
@@ -84,23 +114,94 @@ class Get1M:
 						word_n = int(line_parts[0])
 						if (word_n < 100):
 							continue
+
+						word = line_parts[1]
+						word_count = line_parts[2]
+						if (word.lower() in self.word_database):
+							self.word_database[word.lower()].add_count(word_count,word)
+							# now element should be repositioned
+							# new_position_max = self.word_database[word.lower()].word_n
+							# new_position_min = 1
+						else:
+							self.word_database[word.lower()] = WordInfo(word.lower(),word_n-100,word_count)
+
+
+
 						self.wordlist[word_n-100] = line_parts[1]
 						self.wordcount[word_n-100] = int(line_parts[2])
-						if (word_n > 20100):
-							break
+						# if (word_n > 20100):
+						# 	break
 					except Exception as ex:
 						print (f"While parsing entry: {line}\n\twas an error:{ex}")
+
+
+		# checks variants: word + s/as/es/os/ás... ; word - s/as/es...
+		# rules: after unstressed vowels - plurals: += 's'
+		#        after others except 'é'            += 'es'
+		for word in self.word_database:
+			for vowel in SUFFIX_VOWELS:
+				form_kind = 0
+				if (word[-1] in UNSTRESSED_VOWELS):
+					if (vowel == ''):
+						form_kind = 1
+				elif (word[-1] != 'é'):
+					if (vowel == 'e'):
+						form_kind = 1
+				self.check_variant(word,word + vowel + 's',form_kind)
+
+			if (len(word) > 1 and word.endswith('s')):
+				form_kind = 1 if ( word[-2] in UNSTRESSED_VOWELS ) else 0				
+				self.check_variant(word,word[:-1],form_kind)
+				if (word[-2] in SUFFIX_VOWELS):
+					form_kind = 0
+					if (len(word) > 2 and word[-2]=='e' and\
+						(word[-3] not in UNSTRESSED_VOWELS) and\
+						(word[-3] != 'é')\
+						):
+						form_kind = 1
+					self.check_variant(word,word[:-2],form_kind)
+
 		return 0
 
-	def print_info(self, ref_dic) -> None:
-		for i in range(20000):
-			if (self.wordlist[i] is not None):
-				ext_num = ''
-				if (ref_dic is not None):
-					if (self.wordlist[i] in ref_dic.wordindex):
-						ext_num = ref_dic.wordindex[self.wordlist[i]]
-				print (f"{i}#{ext_num}({self.wordcount[i]}): \"{self.wordlist[i]}\"")
 
+	def check_variant(self,word,variant,form_kind=0):
+		if (variant in self.word_database):
+			self.word_database[word].add_form(variant,\
+				str(self.word_database[variant].word_count), form_kind)
+
+
+	def print_info(self, ref_dic) -> None:
+		for word in self.word_database:
+			other_forms = self.word_database[word].other_forms
+			if (len(other_forms) > 0):
+				print (f"{word} {other_forms}")
+
+		print ("====================================================================")
+		# for i in range(1000):
+		# 	if (self.wordlist[i] is not None):
+		# 		ext_num = ''
+		# 		if (ref_dic is not None):
+		# 			if (self.wordlist[i] in ref_dic.wordindex):
+		# 				ext_num = ref_dic.wordindex[self.wordlist[i]]
+		# 		print (f"{i}#{ext_num}({self.wordcount[i]}): \"{self.wordlist[i]}\"")
+
+		# wcnt = 0
+		# for word in self.word_database.values():
+		# 	if (not(word.word is str)):
+		# 		print (word,str(word.word))
+		# 	if (not(word.word_count is int)):
+		# 		print ("Count not int:",word.word,word.word_count)
+		# 	wcnt+=1
+		# 	if (wcnt > 1000):
+		# 		break
+
+		sorted_info = sorted(self.word_database.values(),key=lambda k:(-k.word_count, k.word))
+		of_count = 1
+		for w in sorted_info:
+			# print ('\t'.join([w.word,str(w.word_count),str(w.plural_forms),w.info]))
+			if (len(w.other_forms) > 0):
+				print (of_count,'.',w.word,'\t',str(w.other_forms), w.word_count, str(w.info))
+				of_count += 1
 
 
 
